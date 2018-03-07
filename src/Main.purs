@@ -17,10 +17,12 @@ import Type.Prelude (SProxy(..))
 
 -- | Let's assume that our fields are really simple
 -- | and contain only validation result.
--- | Errors are kept in `Array`
+-- | Errors are kept in `Array`.
 type Input err value = V (Array err) value
 
 -- | Let's define some simple validators for email field
+
+-- | ...of course they are really dummy validators ;-)
 
 emailFormat = Validation.hoistFnV \e →
   if contains (Pattern "@") e
