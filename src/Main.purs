@@ -10,7 +10,8 @@ import Data.Maybe (Maybe(..))
 import Data.String (Pattern(..), contains, indexOf, length, toCharArray)
 import Data.Tuple (Tuple(..))
 import Data.Variant (Variant, inj)
-import Polyform.Validation (V(..), Validation(..))
+import Debug.Trace (traceAnyA)
+import Polyform.Validation (V(..), Validation(..), runValidation)
 import Polyform.Validation as Validation
 import Type.Prelude (SProxy(..))
 
@@ -22,8 +23,8 @@ type Input err value = V (Array err) value
 
 emailFormat = Validation.hoistFnV \e →
   if contains (Pattern "@") e
-    then Invalid [inj (SProxy ∷ SProxy "emailFormat") e]
-    else pure e
+    then pure e
+    else Invalid [inj (SProxy ∷ SProxy "emailFormat") e]
 
 emailIsUsed = Validation.hoistFnMV \e → do
   -- | Some effectful computation inside your monad
@@ -60,7 +61,7 @@ passwordFieldValidation min max = maxLength max *> minLength min *> hasDigit
 
 data Field
   = EmailField (Input (Variant (emailFormat ∷ String, isUsed ∷ String)) String)
-  | PasswordField (Input (Variant (hasDigit ∷ String, maxLength ∷ Tuple String Int, minLength ∷ Tuple String Int)) String)
+  | PasswordField (Input (Variant (hasDigit ∷ String, maxLength ∷ Tuple Int String, minLength ∷ Tuple Int String)) String)
 
 
 
@@ -71,17 +72,17 @@ type Form = Tuple (Array String) (Array Field)
 -- | Let's build our form without any external helpers
 -- | This function builds single field form
 -- | given field validation.
-fieldForm fetchValue fieldValidation =
+fieldForm fetchValue constructor fieldValidation =
   Validation $ \inputRecord → do
     let inputValue = fetchValue inputRecord
     r ← Validation.runValidation fieldValidation inputValue
     pure $ case r of
-      Valid e v → Valid (Tuple [] [Valid e v]) v
-      Invalid e → Invalid (Tuple [] [Invalid e])
+      Valid e v → Valid (Tuple [] [constructor (Valid e v)]) v
+      Invalid e → Invalid (Tuple [] [constructor (Invalid e)])
 
-emailForm = fieldForm (_.email) emailFieldValidation
+emailForm = fieldForm (_.email) EmailField emailFieldValidation
 
-buildPasswordForm fetch = fieldForm fetch (passwordFieldValidation 5 50)
+buildPasswordForm fetch = fieldForm fetch PasswordField (passwordFieldValidation 5 50)
 
 passwordForm
   = ({password1: _, password2: _} <$> (buildPasswordForm _.password1) <*> (buildPasswordForm _.password2))
@@ -93,6 +94,30 @@ passwordForm
 
 signupForm = {password: _, email: _} <$> passwordForm <*> emailForm
 
-main :: forall e. Eff (console :: CONSOLE | e) Unit
+printResult =
+  case _ of
+    Valid form value → do
+      log "FORM VALID:"
+      traceAnyA form
+      log "FINAL VALUE:"
+      traceAnyA value
+
+    Invalid form → do
+      log "FORM INVALID:"
+      traceAnyA form
+
 main = do
-  log "Hello sailor!"
+  log "EXAMPLE"
+
+  v1 ← runValidation signupForm {email: "wrongemailformat", password1: "shrt", password2: "nodigits"}
+  printResult v1
+
+  log "\n\n"
+
+  v2 ← runValidation signupForm {email: "email@example.com", password1: "password1", password2: "password2"}
+  printResult v2
+
+  log "\n\n"
+
+  v3 ← runValidation signupForm {email: "email@example.com", password1: "password921", password2: "password921"}
+  printResult v3
