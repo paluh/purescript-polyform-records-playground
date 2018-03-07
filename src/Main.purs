@@ -70,6 +70,8 @@ data Field
 
 -- | Form types and form related helpers and validations
 
+-- | This is our form type so when you see Tuple
+-- | below it means that we are building Form.
 type Form = Tuple (Array String) (Array Field)
 
 -- | Let's build our form without any external helpers
@@ -102,6 +104,13 @@ buildPasswordForm fetch = fieldForm fetch PasswordField (passwordFieldValidation
 
 passwordForm
   = ({password1: _, password2: _} <$> (buildPasswordForm _.password1) <*> (buildPasswordForm _.password2))
+  -- | Here we are composing validations
+  -- | so previous step results
+  -- | are input for this next step result.
+  -- | We can always fail here and return
+  -- | form representing our failure
+  -- | which will be appended to the
+  -- | whole form.
   >>> Validation.hoistFnV \{ password1, password2 } →
     if password1 /= password2
       then Invalid (Tuple ["Password dont match"] [])
