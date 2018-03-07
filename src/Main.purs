@@ -106,7 +106,9 @@ passwordForm
   = ({password1: _, password2: _} <$> (buildPasswordForm _.password1) <*> (buildPasswordForm _.password2))
   -- | Here we are composing validations
   -- | so previous step results
-  -- | are input for this next step result.
+  -- | (record with email and passwords)
+  -- | are input for this next step.
+  -- |
   -- | We can always fail here and return
   -- | form representing our failure
   -- | which will be appended to the
