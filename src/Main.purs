@@ -87,7 +87,7 @@ buildPasswordForm fetch = fieldForm fetch PasswordField (passwordFieldValidation
 passwordForm
   = ({password1: _, password2: _} <$> (buildPasswordForm _.password1) <*> (buildPasswordForm _.password2))
   -- | we are operating here on form component level
-  >>> Validation.hoistFn \{ password1, password2 } →
+  >>> Validation.hoistFnV \{ password1, password2 } →
     if password1 /= password2
       then Invalid (Tuple ["Password dont match"] [])
       else pure password1
