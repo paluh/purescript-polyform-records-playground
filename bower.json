@@ -1,0 +1,20 @@
+{
+  "ignore": [
+    "**/.*",
+    "node_modules",
+    "bower_components",
+    "output"
+  ],
+  "dependencies": {
+    "purescript-polyform": "^0.5.0"
+  },
+  "devDependencies": {
+    "purescript-psci-support": "^3.0.0",
+    "purescript-debug": "^3.0.0",
+    "purescript-test-unit": "^13.0.0",
+    "purescript-affjax": "^5.0.0",
+    "purescript-random": "^3.0.0"
+  },
+  "license": "BSD-3-Clause",
+  "name": "purescript-polyform-record-playground"
+}
