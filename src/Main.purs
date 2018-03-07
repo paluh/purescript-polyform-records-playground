@@ -30,9 +30,9 @@ emailFormat = Validation.hoistFnV \e →
     else Invalid [inj (SProxy ∷ SProxy "emailFormat") e]
 
 emailIsUsed = Validation.hoistFnMV \e → do
-  -- | Some effectful computation inside your monad
-  -- | Let's toss a coin instead of checkin db
-  -- | if email is really used
+  -- | Some effectful computation inside your monad.
+  -- | Let's toss a coin instead of checking db
+  -- | if email is really used>
   v ← random
   pure $ if v > 0.5
     then Invalid [inj (SProxy ∷ SProxy "isUsed") e]
@@ -40,7 +40,7 @@ emailIsUsed = Validation.hoistFnMV \e → do
 
 emailFieldValidation = emailFormat *> emailIsUsed
 
--- | Let's define some simple validators for password field
+-- | Let's define some simple validators for password field.
 
 minLength m = Validation.hoistFnV \p →
   if length p < m
