@@ -79,7 +79,7 @@ type Form = Tuple (Array String) (Array Field)
 -- |  * field validation
 -- |
 -- | Here we can also observe that validation is
--- | nothing more then function from input to V
+-- | nothing more than function from input to V
 -- | in monadic context.
 fieldForm fetchValue constructor fieldValidation =
   Validation $ \inputRecord → do
