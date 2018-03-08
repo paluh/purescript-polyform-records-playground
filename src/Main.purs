@@ -15,13 +15,20 @@ import Polyform.Validation (V(..), Validation(..), runValidation)
 import Polyform.Validation as Validation
 import Type.Prelude (SProxy(..))
 
+
+-- This represents a basic input field that can be used for validation
+-- and also carries information necessary for rendering.
+--
+-- data V e a = Invalid e | Valid a
+--
+-- An input will
+-- only consists of the validation and result:
 -- | Let's assume that our fields are really simple
 -- | and contain only validation result.
 -- | Errors are kept in `Array`.
-type Input err value = V (Array err) value
+type Input attrs err value = { value :: V (Array err) value | attrs }
 
 -- | Let's define some simple validators for email field
-
 -- | ...of course they are really dummy validators ;-)
 
 emailFormat :: ∀ m err
@@ -89,8 +96,16 @@ passwordFieldValidation min max =
   maxLength max *> minLength min *> hasDigit
 
 data Field
-  = EmailField (Input (Variant (emailFormat ∷ String, isUsed ∷ String)) String)
-  | PasswordField (Input (Variant (hasDigit ∷ String, maxLength ∷ Tuple Int String, minLength ∷ Tuple Int String)) String)
+  = EmailField (Input () (Variant (emailFormat ∷ String, isUsed ∷ String)) String)
+  | PasswordField (Input () (Variant (hasDigit ∷ String, maxLength ∷ Tuple Int String, minLength ∷ Tuple Int String)) String)
+
+defaultEmailField :: Input () (Variant (emailFormat :: String, isUsed :: String)) String
+defaultEmailField =
+  { value: Valid [] "" }
+
+defaultPasswordField :: Input () (Variant (hasDigit :: String, maxLength :: Tuple Int String, minLength :: Tuple Int String)) String
+defaultPasswordField =
+  { value: Valid [] "" }
 
 -- | Form types and form related helpers and validations
 
@@ -107,35 +122,38 @@ type Form = Tuple (Array String) (Array Field)
 -- | Here we can also observe that validation is
 -- | nothing more than function from input to V
 -- | in monadic context.
-formFromField :: forall m record input output err
+formFromField :: ∀ m attrs record input output err
   . Monad m
  => (record -> input)
- -> (V err output -> Field)
+ -> ({ value :: V err output | attrs } -> Field)
+ -> { value :: V err output | attrs }
  -> Validation m err input output
  -> Validation m Form record output
-formFromField getField constructor fieldValidation =
+formFromField accessor constructor default fieldValidation =
   Validation $ \inputRecord → do
     -- | Fetch field value from record using fetcher
-    let inputValue = getField inputRecord
+    let inputValue = accessor inputRecord
     -- | Run field validation agains this value
     r ← Validation.runValidation fieldValidation inputValue
     -- | Based on field validation result let's return:
     pure $ case r of
       -- | form togheter with result value
       -- | so we can combine both into larger values and forms
-      Valid e v → Valid (Tuple [] [constructor (Valid e v)]) v
+      Valid e v → Valid (Tuple [] [ constructor $ default { value = (Valid e v) } ]) v
       -- | or form as representation of our error which
       -- | can be combined with other forms
-      Invalid e → Invalid (Tuple [] [constructor (Invalid e)])
+      Invalid e → Invalid (Tuple [] [ constructor $ default { value = (Invalid e) } ])
 
-emailForm :: ∀ r m eff. MonadEff (random :: RANDOM | eff) m => Validation m Form { email :: String | r } String
-emailForm = formFromField _.email EmailField emailFieldValidation
+emailForm :: ∀ r m eff
+  . MonadEff (random :: RANDOM | eff) m
+ => Validation m Form { email :: String | r } String
+emailForm = formFromField _.email EmailField defaultEmailField emailFieldValidation
 
 buildPasswordForm :: ∀ r m
   . Monad m
  => (r -> String)
  -> Validation m Form r String
-buildPasswordForm getField = formFromField getField PasswordField (passwordFieldValidation 5 50)
+buildPasswordForm accessor = formFromField accessor PasswordField defaultPasswordField (passwordFieldValidation 5 50)
 
 passwordForm :: ∀ m r. Monad m => Validation m Form { password1 :: String, password2 :: String | r } String
 passwordForm
