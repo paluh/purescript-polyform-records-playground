@@ -15,113 +15,164 @@ import Polyform.Validation (V(..), Validation(..), runValidation)
 import Polyform.Validation as Validation
 import Type.Prelude (SProxy(..))
 
+----------
+-- Validation
 
--- This represents a basic input field that can be used for validation
--- and also carries information necessary for rendering.
+-- We'll start our form with validation.
 --
--- data V e a = Invalid e | Valid a
+-- We can define small validators that can be composed together to create a sequence
+-- of checks that a field will have to pass to be considered valid.
 --
--- An input will
--- only consists of the validation and result:
--- | Let's assume that our fields are really simple
--- | and contain only validation result.
--- | Errors are kept in `Array`.
-type Input attrs err value = { value :: V (Array err) value | attrs }
+-- Validators have the Validation type:
+-- newtype Validation m err input output = Validation (input -> m (V err output))
+--
+-- which can be run with the `runValidation` function:
+-- runValidation :: input output err m. Validation m err input output -> (input -> m (V err output))
+--
+-- runValidation makes it more clear what's going on. You have a function from some input type
+-- to the result of validating that type in some monadic context. For example, you might validate
+-- an input integer from a number field to ensure it is greater than 10, returning either errors
+-- or the validated integer.
+--
+-- If your validator doesn't run any effectful computations (like reading from a database) you can
+-- leave the monad polymorphic.
+--
+-- To turn a simple true/false checker into a Validation, you can use the `hoist` functions from the
+-- Validation module. If you have a pure computation, use hoistFnV; if you have an effectful one,
+-- use hoistFnMV.
 
--- | Let's define some simple validators for email field
--- | ...of course they are really dummy validators ;-)
 
+-- This validator will check that the input string has the "@" symbol as a naive email validation.
+-- Its input type is a String, and it outputs a validated String. There are no effectful computations,
+-- so we leave the monad polymorphic and use hoistFnV. Finally, we're going to create a new error variant.
+--
+-- The variant will contain the string that failed, so we can easily inspect the reason for failure.
 emailFormat :: ∀ m err
   . Monad m
   => Validation m (Array (Variant (emailFormat :: String | err))) String String
-emailFormat = Validation.hoistFnV \e →
-  if contains (Pattern "@") e
-    then pure e
-    else Invalid [inj (SProxy ∷ SProxy "emailFormat") e]
+emailFormat = Validation.hoistFnV \str →
+  if contains (Pattern "@") str
+    then pure str
+    else Invalid [ inj (SProxy :: SProxy "emailFormat") str ]
 
+-- This validator mimics checking a database to ensure an email is not already used; it
+-- does that using a coin toss. Because of that, we're no longer in any monad; we need
+-- to be in a monad supporting Eff and the RANDOM effect type.
+--
+-- Otherwise, this validator looks similar to the previous one. We define a new error
+-- variant, we take a string as input, and we return a validated string.
 emailIsUsed :: ∀ m eff err
   . MonadEff (random :: RANDOM | eff) m
  => Validation m (Array (Variant (isUsed :: String | err))) String String
-emailIsUsed = Validation.hoistFnMV \email -> do
-  -- | Some effectful computation inside your monad.
-  -- | Let's toss a coin instead of checking db
-  -- | if email is really used>
-  v ← liftEff random
+emailIsUsed = Validation.hoistFnMV \str -> do
+  v <- liftEff random
   pure $ if v > 0.5
-    then Invalid [ inj (SProxy ∷ SProxy "isUsed") email ]
-    else pure email
+    then pure str
+    else Invalid [ inj (SProxy :: SProxy "isUsed") str ]
 
-emailFieldValidation :: ∀ m eff err
-  . MonadEff (random :: RANDOM | eff) m
- => Validation m (Array (Variant (emailFormat :: String, isUsed :: String | err))) String String
-emailFieldValidation = emailFormat *> emailIsUsed
-
--- | Let's define some simple validators for password field.
-
+-- These validators ensure that an input string is within some length. It shows how
+-- you can create validators that rely on arguments to determine how they behave. It also
+-- demonstrates how variants can carry extra information to help you diagnose errors: in
+-- this case, our variant shows the string input and the value it failed to be greater than.
 minLength :: ∀ m err
   . Monad m
  => Int
  -> Validation m (Array (Variant (minLength :: Tuple Int String | err))) String String
-minLength m = Validation.hoistFnV \p →
-  if length p < m
-    then Invalid [inj (SProxy ∷ SProxy "minLength") (Tuple m p)]
-    else pure p
+minLength min = Validation.hoistFnV \str ->
+  if length str > min
+    then pure str
+    else Invalid [ inj (SProxy ∷ SProxy "minLength") (Tuple min str) ]
 
 maxLength :: ∀ m err
   . Monad m
  => Int
  -> Validation m (Array (Variant (maxLength :: Tuple Int String | err))) String String
-maxLength m = Validation.hoistFnV \p →
-  if length p > m
-    then Invalid [ inj (SProxy ∷ SProxy "maxLength") (Tuple m p) ]
-    else pure p
+maxLength max = Validation.hoistFnV \str →
+  if length str < max
+    then pure str
+    else Invalid [ inj (SProxy :: SProxy "maxLength") (Tuple max str) ]
 
+-- Another simple validator; this one ensures that the input contains a digit.
 hasDigit :: ∀ m err
   . Monad m
  => Validation m (Array (Variant (hasDigit :: String | err))) String String
-hasDigit = Validation.hoistFnV \p →
+hasDigit = Validation.hoistFnV \str →
   let
-    chars = toCharArray p
+    chars = toCharArray str
   in
     if any (_ `elem` chars) (toCharArray "0123456789")
-      then pure p
-      else Invalid [ inj (SProxy ∷ SProxy "hasDigit") p ]
+      then pure str
+      else Invalid [ inj (SProxy :: SProxy "hasDigit") str ]
+
+
+----------
+-- Composed Validators
+
+-- We can freely compose validators. The resulting validator will contain the variant of all possible
+-- errors, though composing with (>>>) will short-circuit at the first failed validation.
+emailFieldValidation :: ∀ m eff err
+  . MonadEff (random :: RANDOM | eff) m
+ => Validation m (Array (Variant (emailFormat :: String, isUsed :: String | err))) String String
+emailFieldValidation = emailFormat >>> emailIsUsed
 
 passwordFieldValidation :: ∀ m err
   . Monad m
  => Int
  -> Int
  -> Validation m (Array (Variant (hasDigit :: String, maxLength :: Tuple Int String, minLength :: Tuple Int String | err))) String String
-passwordFieldValidation min max =
-  maxLength max *> minLength min *> hasDigit
+passwordFieldValidation min max = maxLength max >>> minLength min >>> hasDigit
+
+
+----------
+-- Fields
+
+-- Forms are made up of fields. A given form will generally be a sum type of all the fields
+-- in the form; each field will carry with it at least the information necessary for validation,
+-- but you'll usually also want to carry some extra attributes you can use for rendering. For
+-- example, you might also want to carry an id, label text, set of CSS classes, or other information.
+--
+-- Below we've defined a simple input type we can use for validation
+-- which can carry information for rendering as extra fields.
+--
+-- An input has at least a "value", which is either an array of validation
+-- errors, or a successful value, but can carry other fields too.
+--
+-- data V e a = Invalid e | Valid e a
+
+type Input attrs err a = { value :: V (Array err) a | attrs }
+
+-- Our actual fields will be a sum type of possiblefield types on the form, where each one is our Input type
+-- wrapped in a constructor.
 
 data Field
-  = EmailField (Input () (Variant (emailFormat ∷ String, isUsed ∷ String)) String)
-  | PasswordField (Input () (Variant (hasDigit ∷ String, maxLength ∷ Tuple Int String, minLength ∷ Tuple Int String)) String)
+  = EmailField    (Input () (Variant (emailFormat :: String, isUsed :: String)) String)
+  | PasswordField (Input () (Variant (hasDigit :: String, maxLength :: Tuple Int String, minLength :: Tuple Int String)) String)
 
-defaultEmailField :: Input () (Variant (emailFormat :: String, isUsed :: String)) String
-defaultEmailField =
+-- We need to define default values here (not 100% sure about a better way to handle this)
+
+defaultInputString :: ∀ err. Input () (Variant err) String
+defaultInputString =
   { value: Valid [] "" }
 
-defaultPasswordField :: Input () (Variant (hasDigit :: String, maxLength :: Tuple Int String, minLength :: Tuple Int String)) String
-defaultPasswordField =
-  { value: Valid [] "" }
 
--- | Form types and form related helpers and validations
+----------
+-- Form types and form-related helpers
 
--- | This is our form type so when you see Tuple
--- | below it means that we are building Form.
+-- This is our form type; when you see Tuple below it means that we are
+-- building a Form. The first position contains form-level errors;
+-- the second contains our fields, which each may contain field-level
+-- errors.
 type Form = Tuple (Array String) (Array Field)
 
--- | Let's build our form without any external helpers
--- | This function builds single field form from:
--- |  * value fetcher
--- |  * field type constructor
--- |  * field validation
--- |
--- | Here we can also observe that validation is
--- | nothing more than function from input to V
--- | in monadic context.
+-- Let's build our form without any external helpers
+-- This function builds a single-field form from:
+--  * record accessor function
+--  * field type constructor
+--  * field validation
+--
+-- Here we can also observe that validation is
+-- nothing more than function from input to V
+-- in monadic context.
 formFromField :: ∀ m attrs record input output err
   . Monad m
  => (record -> input)
@@ -129,54 +180,64 @@ formFromField :: ∀ m attrs record input output err
  -> { value :: V err output | attrs }
  -> Validation m err input output
  -> Validation m Form record output
-formFromField accessor constructor default fieldValidation =
+formFromField accessor constructor record fieldValidation =
   Validation $ \inputRecord → do
-    -- | Fetch field value from record using fetcher
+    -- Retrieve the correct input value using the accessor (ex: _.email)
     let inputValue = accessor inputRecord
-    -- | Run field validation agains this value
-    r ← Validation.runValidation fieldValidation inputValue
-    -- | Based on field validation result let's return:
+    -- Run field validation against the value
+    r <- Validation.runValidation fieldValidation inputValue
+    -- Based on the result of the validation, we'll return either...
     pure $ case r of
-      -- | form togheter with result value
-      -- | so we can combine both into larger values and forms
-      Valid e v → Valid (Tuple [] [ constructor $ default { value = (Valid e v) } ]) v
-      -- | or form as representation of our error which
-      -- | can be combined with other forms
-      Invalid e → Invalid (Tuple [] [ constructor $ default { value = (Invalid e) } ])
+      -- The form along with the result value, so we can combine both into
+      -- larger values and forms. To do this, we'll update the value of the provided
+      Valid e a → Valid (Tuple [] [ constructor $ record { value = Valid e a } ]) a
+      -- Or the form as a representation of our error, which can then be combined
+      -- with other forms.
+      Invalid e -> Invalid $ Tuple [] [ constructor $ record { value = Invalid e } ]
 
+
+-- Here, we create an single-field form that expects an input record with an 'email'
+-- field we can retrieve for validation.
 emailForm :: ∀ r m eff
   . MonadEff (random :: RANDOM | eff) m
  => Validation m Form { email :: String | r } String
-emailForm = formFromField _.email EmailField defaultEmailField emailFieldValidation
+emailForm = formFromField _.email EmailField defaultInputString emailFieldValidation
 
+-- This function takes its accessor as an argument, but otherwise works the same as
+-- the email form.
 buildPasswordForm :: ∀ r m
   . Monad m
  => (r -> String)
  -> Validation m Form r String
-buildPasswordForm accessor = formFromField accessor PasswordField defaultPasswordField (passwordFieldValidation 5 50)
+buildPasswordForm accessor = formFromField accessor PasswordField defaultInputString (passwordFieldValidation 5 50)
 
+-- This form, composed of two smaller single-field forms, works to validate two passwords.
 passwordForm :: ∀ m r. Monad m => Validation m Form { password1 :: String, password2 :: String | r } String
 passwordForm
   = ({password1: _, password2: _} <$> (buildPasswordForm _.password1) <*> (buildPasswordForm _.password2))
-  -- | Here we are composing validations
-  -- | so previous step results
-  -- | (record with email and passwords)
-  -- | are input for this next step.
-  -- |
-  -- | We can always fail here and return
-  -- | form representing our failure
-  -- | which will be appended to the
-  -- | whole form.
+  -- Here we are composing validations, so the previous step results are
+  -- inputs for this next step. It's a usual validation like our others.
+  -- We can always fail here and return a form representing our error, which
+  -- will be appended to the whole form.
   >>> Validation.hoistFnV \{ password1, password2 } →
-    if password1 /= password2
-      then Invalid (Tuple ["Password dont match"] [])
-      else pure password1
+    if password1 == password2
+      then pure password1
+      else Invalid $ Tuple [ "Password dont match" ] []
 
+-- We can continue composing into bigger and bigger forms. This one expects
+-- an input record with at least two password fields and an email field on it,
+-- and it will validate to a different type altogether: a record with a password
+-- and email field.
 signupForm :: ∀ r m eff
   . MonadEff (random :: RANDOM | eff) m
  => Validation m Form { password1 :: String, password2 :: String, email :: String | r } { password :: String, email :: String }
 signupForm = {password: _, email: _} <$> passwordForm <*> emailForm
 
+
+----------
+-- Running the form
+
+-- This helper reveals the structure of the forms with `pulp run`.
 printResult :: ∀ err eff a. V err a -> Eff (console :: CONSOLE | eff) Unit
 printResult =
   case _ of
@@ -189,6 +250,7 @@ printResult =
     Invalid form → do
       log "FORM INVALID:"
       traceAnyA form
+
 
 main :: ∀ eff. Eff (console :: CONSOLE, random :: RANDOM | eff) Unit
 main = do
