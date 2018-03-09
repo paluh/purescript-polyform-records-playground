@@ -69,9 +69,11 @@ emailIsUsed :: ∀ m eff err
  => Validation m (Array (Variant (isUsed :: String | err))) String String
 emailIsUsed = Validation.hoistFnMV \str -> do
   v <- liftEff random
-  pure $ if v > 0.5
-    then pure str
-    else Invalid [ inj (SProxy :: SProxy "isUsed") str ]
+  pure (pure str)
+  -- LET"S DROP TOSSING NOW TO SIMPLIFY DEBUGING :-)
+  -- $ if v > 0.5
+  --  then pure str
+  --  else Invalid [ inj (SProxy :: SProxy "isUsed") str ]
 
 -- These validators ensure that an input string is within some length. It shows how
 -- you can create validators that rely on arguments to determine how they behave. It also
@@ -275,8 +277,12 @@ main = do
   v1 <- runValidation signupForm {email: notValidate "wrongemailformat", password1: notValidate "shrt", password2: notValidate "nodigits"}
   printResult v1
 
-  -- | First field is validated
+  -- | Only first field is validated but wrong
   v1 <- runValidation signupForm {email: validate "wrongemailformat", password1: notValidate "shrt", password2: notValidate "nodigits"}
+  printResult v1
+
+  -- | Only first field is validated and it is ok - result is still Nothing
+  v1 <- runValidation signupForm {email: validate "email@example.com", password1: notValidate "shrt", password2: notValidate "nodigits"}
   printResult v1
 
   -- | First two fields are validated
