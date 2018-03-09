@@ -2,11 +2,14 @@ module Main where
 
 import Prelude
 
+import Control.Apply (lift2)
 import Control.Monad.Eff (Eff)
 import Control.Monad.Eff.Class (class MonadEff, liftEff)
 import Control.Monad.Eff.Console (CONSOLE, log)
 import Control.Monad.Eff.Random (random, RANDOM)
 import Data.Array (any, elem)
+import Data.Maybe (Maybe(..))
+import Data.Monoid (class Monoid, mempty)
 import Data.String (Pattern(Pattern), contains, length, toCharArray)
 import Data.Tuple (Tuple(..))
 import Data.Variant (Variant, inj)
@@ -175,54 +178,64 @@ type Form = Tuple (Array String) (Array Field)
 -- in monadic context.
 formFromField :: ∀ m attrs record input output err
   . Monad m
- => (record -> input)
- -> ({ value :: V err output | attrs } -> Field)
- -> { value :: V err output | attrs }
- -> Validation m err input output
- -> Validation m Form record output
+  => Monoid err
+  => (record -> {value ∷ input, validate ∷ Boolean})
+  -> ({ value :: V err input | attrs } -> Field)
+  -> { value :: V err input | attrs }
+  -> Validation m err input output
+  -> Validation m Form record (Maybe output)
 formFromField accessor constructor record fieldValidation =
   Validation $ \inputRecord → do
     -- Retrieve the correct input value using the accessor (ex: _.email)
-    let inputValue = accessor inputRecord
+    let {value, validate} = accessor inputRecord
     -- Run field validation against the value
-    r <- Validation.runValidation fieldValidation inputValue
-    -- Based on the result of the validation, we'll return either...
-    pure $ case r of
-      -- The form along with the result value, so we can combine both into
-      -- larger values and forms. To do this, we'll update the value of the provided
-      Valid e a → Valid (Tuple [] [ constructor $ record { value = Valid e a } ]) a
-      -- Or the form as a representation of our error, which can then be combined
-      -- with other forms.
-      Invalid e -> Invalid $ Tuple [] [ constructor $ record { value = Invalid e } ]
+    if validate
+      then do
+        r <- Validation.runValidation fieldValidation value
+        -- Based on the result of the validation, we'll return either...
+        pure $ case r of
+          -- The form along with the result value, so we can combine both into
+          -- larger values and forms. To do this, we'll update the value of the provided
+          Valid e a → Valid (Tuple [] [ constructor $ record { value = Valid e value } ]) (Just a)
+          -- Or the form as a representation of our error, which can then be combined
+          -- with other forms.
+          Invalid e -> Invalid $ Tuple [] [ constructor $ record { value = Invalid e } ]
+      else
+        pure $ Valid (Tuple [] [ constructor $ record { value = Valid mempty value } ]) Nothing
 
 
 -- Here, we create an single-field form that expects an input record with an 'email'
 -- field we can retrieve for validation.
 emailForm :: ∀ r m eff
   . MonadEff (random :: RANDOM | eff) m
- => Validation m Form { email :: String | r } String
+  => Validation m Form { email :: { value :: String, validate :: Boolean } | r } (Maybe String)
 emailForm = formFromField _.email EmailField defaultInputString emailFieldValidation
 
 -- This function takes its accessor as an argument, but otherwise works the same as
 -- the email form.
 buildPasswordForm :: ∀ r m
   . Monad m
- => (r -> String)
- -> Validation m Form r String
+ => (r -> { value ∷ String, validate ∷ Boolean })
+ -> Validation m Form r (Maybe String)
 buildPasswordForm accessor = formFromField accessor PasswordField defaultInputString (passwordFieldValidation 5 50)
 
+-- | I should have define this earlier ;-)
+type StringValue = { value ∷ String, validate ∷ Boolean }
+
 -- This form, composed of two smaller single-field forms, works to validate two passwords.
-passwordForm :: ∀ m r. Monad m => Validation m Form { password1 :: String, password2 :: String | r } String
+passwordForm :: ∀ m r. Monad m => Validation m Form ({ password1 :: StringValue, password2 :: StringValue | r }) (Maybe String)
 passwordForm
-  = ({password1: _, password2: _} <$> (buildPasswordForm _.password1) <*> (buildPasswordForm _.password2))
-  -- Here we are composing validations, so the previous step results are
-  -- inputs for this next step. It's a usual validation like our others.
-  -- We can always fail here and return a form representing our error, which
-  -- will be appended to the whole form.
-  >>> Validation.hoistFnV \{ password1, password2 } →
-    if password1 == password2
-      then pure password1
-      else Invalid $ Tuple [ "Password dont match" ] []
+  = (lift2 {password1: _, password2: _} <$> (buildPasswordForm _.password1) <*> (buildPasswordForm _.password2))
+  -- -- Here we are composing validations, so the previous step results are
+  -- -- inputs for this next step. It's a usual validation like our others.
+  -- -- We can always fail here and return a form representing our error, which
+  -- -- will be appended to the whole form.
+  >>> Validation.hoistFnV (case _ of
+    Nothing → pure Nothing
+    Just { password1, password2 } →
+      if password1 == password2
+        then pure (Just password1)
+        else Invalid $ Tuple [ "Password dont match" ] [])
 
 -- We can continue composing into bigger and bigger forms. This one expects
 -- an input record with at least two password fields and an email field on it,
@@ -230,8 +243,8 @@ passwordForm
 -- and email field.
 signupForm :: ∀ r m eff
   . MonadEff (random :: RANDOM | eff) m
- => Validation m Form { password1 :: String, password2 :: String, email :: String | r } { password :: String, email :: String }
-signupForm = {password: _, email: _} <$> passwordForm <*> emailForm
+ => Validation m Form { password1 :: StringValue, password2 :: StringValue, email :: StringValue | r } (Maybe { password :: String, email :: String })
+signupForm = lift2 {password: _, email: _} <$> passwordForm <*> emailForm
 
 
 ----------
@@ -251,20 +264,40 @@ printResult =
       log "FORM INVALID:"
       traceAnyA form
 
+validate value = { value, validate: true }
+notValidate value = { value, validate: false }
 
 main :: ∀ eff. Eff (console :: CONSOLE, random :: RANDOM | eff) Unit
 main = do
   log "EXAMPLE"
 
-  v1 <- runValidation signupForm {email: "wrongemailformat", password1: "shrt", password2: "nodigits"}
+  -- | Nothing is validated - we are getting FORM VALID but without any result ;-)
+  v1 <- runValidation signupForm {email: notValidate "wrongemailformat", password1: notValidate "shrt", password2: notValidate "nodigits"}
   printResult v1
 
-  log "\n\n"
+  -- | First field is validated
+  v1 <- runValidation signupForm {email: validate "wrongemailformat", password1: notValidate "shrt", password2: notValidate "nodigits"}
+  printResult v1
 
-  v2 <- runValidation signupForm {email: "email@example.com", password1: "password1", password2: "password2"}
-  printResult v2
+  -- | First two fields are validated
+  v1' <- runValidation signupForm {email: validate "wrongemailformat", password1: validate "shrt", password2: notValidate "nodigits"}
+  printResult v1'
 
-  log "\n\n"
+  -- | All fields are validated
+  v1' <- runValidation signupForm {email: validate "wrongemailformat", password1: validate "shrt", password2: validate "nodigits"}
+  printResult v1'
 
-  v3 <- runValidation signupForm {email: "email@example.com", password1: "password921", password2: "password921"}
+
+  -- | Form is really validated and valid
+  v3 <- runValidation signupForm {email: validate "email@example.com", password1: validate "password921", password2: validate "password921"}
   printResult v3
+
+  -- log "\n\n"
+
+  -- v2 <- runValidation signupForm {email: "email@example.com", password1: "password1", password2: "password2"}
+  -- printResult v2
+
+  -- log "\n\n"
+
+  -- v3 <- runValidation signupForm {email: "email@example.com", password1: "password921", password2: "password921"}
+  -- printResult v3
