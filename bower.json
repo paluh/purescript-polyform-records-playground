@@ -6,7 +6,9 @@
     "output"
   ],
   "dependencies": {
-    "purescript-polyform": "^0.5.0"
+    "purescript-polyform": "^0.5.0",
+    "purescript-halogen": "^3.1.2",
+    "purescript-console": "^3.0.0"
   },
   "devDependencies": {
     "purescript-psci-support": "^3.0.0",

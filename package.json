@@ -1,0 +1,11 @@
+{
+  "name": "purescript-polyform-records-playground",
+  "version": "1.0.0",
+  "repository": "git@github.com:paluh/purescript-polyform-records-playground.git",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "build": "pulp build --to dist/app.js",
+    "watch": "pulp -w build --to dist/app.js"
+  }
+}
