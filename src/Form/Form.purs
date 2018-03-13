@@ -41,19 +41,18 @@ import Type.Prelude (SProxy(..))
 -- Validation module. If you have a pure computation, use hoistFnV; if you have an effectful one,
 -- use hoistFnMV.
 
-
 -- This validator will check that the input string has the "@" symbol as a naive email validation.
 -- Its input type is a String, and it outputs a validated String. There are no effectful computations,
 -- so we leave the monad polymorphic and use hoistFnV. Finally, we're going to create a new error variant.
 --
 -- The variant will contain the string that failed, so we can easily inspect the reason for failure.
-emailFormat :: ∀ m err
+malformed :: ∀ m err
   . Monad m
-  => Validation m (Array (Variant (emailFormat :: String | err))) String String
-emailFormat = Validation.hoistFnV \str →
+  => Validation m (Array (Variant (malformed :: String | err))) String Email
+malformed = Validation.hoistFnV \str →
   if contains (Pattern "@") str
-    then pure str
-    else Invalid [ inj (SProxy :: SProxy "emailFormat") str ]
+    then pure $ Email str
+    else Invalid [ inj (SProxy :: SProxy "malformed") str ]
 
 -- This validator mimics checking a database to ensure an email is not already used; it
 -- does that using a coin toss. Because of that, we're no longer in any monad; we need
@@ -61,50 +60,46 @@ emailFormat = Validation.hoistFnV \str →
 --
 -- Otherwise, this validator looks similar to the previous one. We define a new error
 -- variant, we take a string as input, and we return a validated string.
-emailIsUsed :: ∀ m eff err
+inUse :: ∀ m eff err
   . MonadEff (random :: RANDOM | eff) m
- => Validation m (Array (Variant (isUsed :: String | err))) String String
-emailIsUsed = Validation.hoistFnMV \str -> do
+ => Validation m (Array (Variant (inUse :: String | err))) Email Email
+inUse = Validation.hoistFnMV \e@(Email str) -> do
   v <- liftEff random
-  pure (pure str)
-  -- LET"S DROP TOSSING NOW TO SIMPLIFY DEBUGING :-)
-  -- $ if v > 0.5
-  --  then pure str
-  --  else Invalid [ inj (SProxy :: SProxy "isUsed") str ]
+  pure (pure e)
 
 -- These validators ensure that an input string is within some length. It shows how
 -- you can create validators that rely on arguments to determine how they behave. It also
 -- demonstrates how variants can carry extra information to help you diagnose errors: in
 -- this case, our variant shows the string input and the value it failed to be greater than.
-minLength :: ∀ m err
+tooShort :: ∀ m err
   . Monad m
  => Int
- -> Validation m (Array (Variant (minLength :: Tuple Int String | err))) String String
-minLength min = Validation.hoistFnV \str ->
+ -> Validation m (Array (Variant (tooShort :: Tuple Int String | err))) String String
+tooShort min = Validation.hoistFnV \str ->
   if length str > min
     then pure str
-    else Invalid [ inj (SProxy ∷ SProxy "minLength") (Tuple min str) ]
+    else Invalid [ inj (SProxy ∷ SProxy "tooShort") (Tuple min str) ]
 
-maxLength :: ∀ m err
+tooLong :: ∀ m err
   . Monad m
  => Int
- -> Validation m (Array (Variant (maxLength :: Tuple Int String | err))) String String
-maxLength max = Validation.hoistFnV \str →
+ -> Validation m (Array (Variant (tooLong :: Tuple Int String | err))) String String
+tooLong max = Validation.hoistFnV \str →
   if length str < max
     then pure str
-    else Invalid [ inj (SProxy :: SProxy "maxLength") (Tuple max str) ]
+    else Invalid [ inj (SProxy :: SProxy "tooLong") (Tuple max str) ]
 
 -- Another simple validator; this one ensures that the input contains a digit.
-hasDigit :: ∀ m err
+missingDigit :: ∀ m err
   . Monad m
- => Validation m (Array (Variant (hasDigit :: String | err))) String String
-hasDigit = Validation.hoistFnV \str →
+ => Validation m (Array (Variant (missingDigit :: String | err))) String String
+missingDigit = Validation.hoistFnV \str →
   let
     chars = toCharArray str
   in
     if any (_ `elem` chars) (toCharArray "0123456789")
       then pure str
-      else Invalid [ inj (SProxy :: SProxy "hasDigit") str ]
+      else Invalid [ inj (SProxy :: SProxy "missingDigit") str ]
 
 
 ----------
@@ -112,58 +107,96 @@ hasDigit = Validation.hoistFnV \str →
 
 -- We can freely compose validators. The resulting validator will contain the variant of all possible
 -- errors, though composing with (>>>) will short-circuit at the first failed validation.
-emailFieldValidation :: ∀ m eff err
+emailFieldValidation :: ∀ m eff
   . MonadEff (random :: RANDOM | eff) m
- => Validation m (Array (Variant (emailFormat :: String, isUsed :: String | err))) String String
-emailFieldValidation = emailFormat >>> emailIsUsed
+ => Validation m (Array EmailError) String Email
+emailFieldValidation = malformed >>> inUse
 
-passwordFieldValidation :: ∀ m err
+passwordFieldValidation :: ∀ m
   . Monad m
  => Int
  -> Int
- -> Validation m (Array (Variant (hasDigit :: String, maxLength :: Tuple Int String, minLength :: Tuple Int String | err))) String String
-passwordFieldValidation min max = maxLength max >>> minLength min >>> hasDigit
+ -> Validation m (Array PasswordError) String String
+passwordFieldValidation min max = tooShort min >>> tooLong max >>> missingDigit
 
 
-----------
--- Fields
-
--- Forms are made up of fields. A given form will generally be a sum type of all the fields
--- in the form; each field will carry with it at least the information necessary for validation,
--- but you'll usually also want to carry some extra attributes you can use for rendering. For
--- example, you might also want to carry an id, label text, set of CSS classes, or other information.
+-- | INPUT
 --
--- Below we've defined a simple input type we can use for validation
--- which can carry information for rendering as extra fields.
+-- Your input is the the set of values that you are holding on to in your state
+-- so you can run validation on them. You'll generally have a record with all fields
+-- in the form. For this form, we'll be working with a few types of DOM inputs, so
+-- we'll write a type for them.
 --
--- An input has at least a "value", which is either an array of validation
--- errors, or a successful value, but can carry other fields too.
+-- In each case, we want to hold on to the actual value and whether or not we want
+-- validation to run on it. Holding this 'validate' flag will let us not validate
+-- fields until they've been edited by the user, for example.
+
+type InputValue a = { value :: a, validate :: Boolean }
+
+-- Here's a set of input values in practice.
+
+type RawForm =
+  { email     :: InputValue String
+  , password1 :: InputValue String
+  , password2 :: InputValue String
+  }
+
+
+-- Your input state is not the same as your form -- though it will contain the raw
+-- values that you want to validate! Your input state is just the contents of what
+-- the user has input into the DOM. So where does the form come in?
+
+
+-- | FIELDS
+
+-- Forms are made up of fields. At minimum, a field on your form will need to carry the list
+-- of possible validation errors that can occur in it, and the value that successful validation
+-- should result in.
+--
+-- However, since we're going to use these fields to render our form in the DOM, we're going
+-- to want to carry extra information for rendering.
+--
+-- In our case, we'll define a FieldValue type. It will hold on to a value of type V:
 --
 -- data V e a = Invalid e | Valid e a
+--
+-- If the field fails to validate, we'll get an Invalid with an array of errors. If it validates,
+-- we'll get a Valid with (why the e?) and the successful value.
 
-type Input attrs err a = { value :: V (Array err) a | attrs }
+type FieldValue attrs err a =
+  { value :: V (Array err) a
+  , key :: String
+  | attrs }
 
--- Our actual fields will be a sum type of possiblefield types on the form, where each one is our Input type
--- wrapped in a constructor.
+-- Now, our form will be made up of lots of fields, and these fields can have all sorts of different
+-- FieldValue types. We need to be able to pass any kind of field into a form, and so we'll wrap them
+-- up in a sum type. Then, our form can be made up of any of these field types.
+--
+-- Our form has two distinct field types: email and password. We'll newtype emails to demonstrate
+-- validation has succeeded, but leave passwords as strings.
+
+newtype Email = Email String
+
+-- While we haven't yet actually written our validation, I'll assume we already know how our fields can
+-- fail. An email address can fail because it's malformed or because we checked our database and it's
+-- already in use. A password can fail because it's too long, too short, or doesn't have a number in it.
+
+type EmailError = Variant ( malformed :: String, inUse :: String )
+type PasswordError = Variant ( missingDigit :: String, tooShort :: Tuple Int String, tooLong :: Tuple Int String )
+
+-- Now, we're ready to create that sum type with our fields. Since we defined FieldValue to allow any
+-- extra attributes we want, we can provide them now. We'll give labels to both field types, and we'll
+-- make sure passwords get help text.
 
 data Field
-  = EmailField    (Input () (Variant (emailFormat :: String, isUsed :: String)) String)
-  | PasswordField (Input () (Variant (hasDigit :: String, maxLength :: Tuple Int String, minLength :: Tuple Int String)) String)
+  = EmailField    (FieldValue (label :: String) EmailError String)
+  | PasswordField (FieldValue (label :: String, helpText :: String) PasswordError String)
 
--- We need to define default values here (not 100% sure about a better way to handle this)
+-- | FORMS
 
-defaultInputString :: ∀ err. Input () (Variant err) String
-defaultInputString =
-  { value: Valid [] "" }
+-- Our form is going to be a simple tuple: an array of strings representing
+-- form-level errors and an array of fields in the form.
 
-
-----------
--- Form types and form-related helpers
-
--- This is our form type; when you see Tuple below it means that we are
--- building a Form. The first position contains form-level errors;
--- the second contains our fields, which each may contain field-level
--- errors.
 type Form = Tuple (Array String) (Array Field)
 
 -- Let's build our form without any external helpers
@@ -175,18 +208,18 @@ type Form = Tuple (Array String) (Array Field)
 -- Here we can also observe that validation is
 -- nothing more than function from input to V
 -- in monadic context.
-formFromField :: ∀ m attrs record input output err
+formFromField :: ∀ m attrs input value output err
   . Monad m
   => Monoid err
-  => (record -> {value ∷ input, validate ∷ Boolean})
-  -> ({ value :: V err input | attrs } -> Field)
-  -> { value :: V err input | attrs }
-  -> Validation m err input output
-  -> Validation m Form record (Maybe output)
-formFromField accessor constructor record fieldValidation =
+  => ( input -> { value :: value, validate :: Boolean } )  -- From our input (state), retrieve the relevant field
+  -> ( { value :: V err value | attrs } -> Field )         -- Given an Input, construct a Field (use our data constructors)
+  -> { value :: V err value | attrs }                      -- The starting state of the field, with its attributes
+  -> Validation m err value output                         -- A validation to run on the input value, returning an array of errors
+  -> Validation m Form input (Maybe output)                -- A new validation ready to produce a full form
+formFromField accessor constructor defaultInput fieldValidation =
   Validation $ \inputRecord → do
     -- Retrieve the correct input value using the accessor (ex: _.email)
-    let {value, validate} = accessor inputRecord
+    let { value, validate } = accessor inputRecord
     -- Run field validation against the value
     if validate
       then do
@@ -195,52 +228,55 @@ formFromField accessor constructor record fieldValidation =
         pure $ case r of
           -- The form along with the result value, so we can combine both into
           -- larger values and forms. To do this, we'll update the value of the provided
-          Valid e a → Valid (Tuple [] [ constructor $ record { value = Valid e value } ]) (Just a)
+          Valid e a → Valid ( Tuple [] [ constructor $ defaultInput { value = Valid e value } ] ) ( Just a )
           -- Or the form as a representation of our error, which can then be combined
           -- with other forms.
-          Invalid e -> Invalid $ Tuple [] [ constructor $ record { value = Invalid e } ]
+          Invalid e -> Invalid $ Tuple [] [ constructor $ defaultInput { value = Invalid e } ]
       else
-        pure $ Valid (Tuple [] [ constructor $ record { value = Valid mempty value } ]) Nothing
-
+        pure $ Valid (Tuple [] [ constructor $ defaultInput { value = Valid mempty value } ]) Nothing
 
 -- Here, we create an single-field form that expects an input record with an 'email'
 -- field we can retrieve for validation.
-emailForm :: ∀ r m eff
+buildEmailForm :: ∀ r m eff
   . MonadEff (random :: RANDOM | eff) m
-  => Validation m Form { email :: { value :: String, validate :: Boolean } | r } (Maybe String)
-emailForm = formFromField _.email EmailField defaultInputString emailFieldValidation
+ => FieldValue (label :: String) EmailError String
+ -> Validation m Form { email :: InputValue String | r } (Maybe Email)
+buildEmailForm v = formFromField _.email EmailField v emailFieldValidation
 
 -- This function takes its accessor as an argument, but otherwise works the same as
 -- the email form.
 buildPasswordForm :: ∀ r m
   . Monad m
- => (r -> { value ∷ String, validate ∷ Boolean })
+ => (r -> { value :: String, validate :: Boolean })
+ -> FieldValue (label :: String, helpText :: String) PasswordError String
  -> Validation m Form r (Maybe String)
-buildPasswordForm accessor = formFromField accessor PasswordField defaultInputString (passwordFieldValidation 5 50)
-
--- | I should have define this earlier ;-)
-type StringValue = { value ∷ String, validate ∷ Boolean }
+buildPasswordForm accessor v = formFromField accessor PasswordField v (passwordFieldValidation 5 50)
 
 -- This form, composed of two smaller single-field forms, works to validate two passwords.
-passwordForm :: ∀ m r. Monad m => Validation m Form ({ password1 :: StringValue, password2 :: StringValue | r }) (Maybe String)
+passwordForm :: ∀ m r. Monad m => Validation m Form ({ password1 :: InputValue String, password2 :: InputValue String | r }) (Maybe String)
 passwordForm
-  = (lift2 {password1: _, password2: _} <$> (buildPasswordForm _.password1) <*> (buildPasswordForm _.password2))
-  -- -- Here we are composing validations, so the previous step results are
-  -- -- inputs for this next step. It's a usual validation like our others.
-  -- -- We can always fail here and return a form representing our error, which
-  -- -- will be appended to the whole form.
+  = (lift2 {password1: _, password2: _} <$> (buildPasswordForm _.password1 pass1) <*> (buildPasswordForm _.password2 pass2))
+  -- Here we are composing validations, so the previous step results are
+  -- inputs for this next step. It's a usual validation like our others.
+  -- We can always fail here and return a form representing our error, which
+  -- will be appended to the whole form.
   >>> Validation.hoistFnV (case _ of
     Nothing → pure Nothing
     Just { password1, password2 } →
       if password1 == password2
         then pure (Just password1)
         else Invalid $ Tuple [ "Password dont match" ] [])
+  where
+    pass1 = { value: Valid [] "", key: "password1", helpText: "Here is some help text for the password field.", label: "Password 1" }
+    pass2 = { value: Valid [] "", key: "password2", helpText: "Enter your password again", label: "Password 2" }
 
 -- We can continue composing into bigger and bigger forms. This one expects
 -- an input record with at least two password fields and an email field on it,
 -- and it will validate to a different type altogether: a record with a password
 -- and email field.
-signupForm :: ∀ r m eff
+signupForm :: ∀ m eff
   . MonadEff (random :: RANDOM | eff) m
- => Validation m Form { password1 :: StringValue, password2 :: StringValue, email :: StringValue | r } (Maybe { password :: String, email :: String })
-signupForm = lift2 {password: _, email: _} <$> passwordForm <*> emailForm
+ => Validation m Form RawForm (Maybe { password :: String, email :: Email })
+signupForm = lift2 { password: _, email: _ } <$> passwordForm <*> emailForm
+  where
+    emailForm = buildEmailForm { value: Valid [] "", key: "email", label: "Email" }
