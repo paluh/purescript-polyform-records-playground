@@ -6,11 +6,14 @@ import Control.Monad.Aff.Class (class MonadAff)
 import Control.Monad.Aff.Console (log, CONSOLE)
 import Control.Monad.Eff.Random (RANDOM)
 import Data.Array (head)
+import Data.Lens (Lens', set)
+import Data.Lens.Record (prop)
 import Data.Maybe (Maybe(..), isJust)
 import Data.Record (modify)
 import Data.Symbol (SProxy(..))
 import Data.Tuple (Tuple(..), fst, snd)
-import Form (Email, Field(PasswordField, EmailField), RawForm, signupForm)
+import Data.Variant (case_, on)
+import Form (AFormField, Email, Field(PasswordField, EmailField), RawForm, AFormPart, signupForm)
 import Halogen as H
 import Halogen.HTML as HH
 import Halogen.HTML.Events as HE
@@ -18,15 +21,34 @@ import Halogen.HTML.Properties as HP
 import Polyform.Validation (V(..), runValidation)
 
 data Query a
-  = ValidateOne String a
+  = ValidateOne AFormPart a
   | ValidateAll a
-  | UpdateContents String String a
+  | UpdateContents AFormField a
 
 type State =
   { form :: RawForm
   , formErrors :: Array String
   , formFields :: Array Field
   , formValue :: Maybe { email :: Email, password :: String } }
+
+_form :: forall t r. Lens' { form :: t | r } t
+_form = prop (SProxy :: SProxy "form")
+_value :: forall t r. Lens' { value :: t | r } t
+_value = prop (SProxy :: SProxy "value")
+_validate :: forall t r. Lens' { validate :: t | r } t
+_validate = prop (SProxy :: SProxy "validate")
+
+doUpdate :: AFormField -> (State -> State)
+doUpdate = case_
+  # on (SProxy :: SProxy "password1") (set (_form <<< prop (SProxy :: SProxy "password1") <<< _value))
+  # on (SProxy :: SProxy "password2") (set (_form <<< prop (SProxy :: SProxy "password2") <<< _value))
+  # on (SProxy :: SProxy "email") (set (_form <<< prop (SProxy :: SProxy "email") <<< _value))
+
+doUpdate' :: AFormPart -> (State -> State)
+doUpdate' = case_
+  # on (SProxy :: SProxy "password1") (set (_form <<< prop (SProxy :: SProxy "password1") <<< _validate))
+  # on (SProxy :: SProxy "password2") (set (_form <<< prop (SProxy :: SProxy "password2") <<< _validate))
+  # on (SProxy :: SProxy "email") (set (_form <<< prop (SProxy :: SProxy "email") <<< _validate))
 
 component :: ∀ eff m. MonadAff ( console :: CONSOLE, random :: RANDOM | eff ) m => H.Component HH.HTML Query Unit Void m
 component =
@@ -63,7 +85,7 @@ component =
     )
 
   renderField :: Field -> H.ComponentHTML Query
-  renderField f@(EmailField { value, label, key }) =
+  renderField f@(EmailField { value, label, aFormField, aFormPart }) =
     formControl
       { helpText: Nothing
       , validation: case value of
@@ -73,9 +95,10 @@ component =
       , inputId: label
       }
       ( HH.input
-        [ HE.onBlur $ HE.input_ $ ValidateOne key
-        , HE.onValueInput $ HE.input $ UpdateContents key ] )
-  renderField f@(PasswordField { value, label, helpText, key }) =
+        [ HE.onBlur $ HE.input_ $ ValidateOne (aFormPart true)
+        , HE.onValueInput $ HE.input $ UpdateContents <<< aFormField
+        ] )
+  renderField f@(PasswordField { value, label, helpText, aFormField, aFormPart }) =
     formControl
       { helpText: Just helpText
       , validation: case value of
@@ -85,8 +108,8 @@ component =
       , inputId: label
       }
       ( HH.input
-        [ HE.onBlur $ HE.input_ $ ValidateOne key
-        , HE.onValueInput $ HE.input $ UpdateContents key
+        [ HE.onBlur $ HE.input_ $ ValidateOne (aFormPart true)
+        , HE.onValueInput $ HE.input $ UpdateContents <<< aFormField
         ] )
 
   eval :: Query ~> H.ComponentDSL State Query Void m
@@ -104,12 +127,12 @@ component =
       H.modify _ { formErrors = fst form, formFields = snd form, formValue = value }
       pure next
 
-    UpdateContents key text next -> do
-      H.modify (\st -> st { form = modify (SProxy :: SProxy "password1") (_ { value = text }) st.form })
+    UpdateContents update next -> do
+      H.modify (doUpdate update)
       pure next
 
-    ValidateOne key next -> do
-      H.modify (\st -> st { form = modify (SProxy :: SProxy "password1") (_ { validate = true }) st.form })
+    ValidateOne update next -> do
+      H.modify (doUpdate' update)
       eval $ ValidateAll next
 
 

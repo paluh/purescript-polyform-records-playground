@@ -135,11 +135,17 @@ type InputValue a = { value :: a, validate :: Boolean }
 
 -- Here's a set of input values in practice.
 
-type RawForm =
-  { email     :: InputValue String
-  , password1 :: InputValue String
-  , password2 :: InputValue String
-  }
+type FormFieldsT f =
+  ( email     :: f String
+  , password1 :: f String
+  , password2 :: f String
+  )
+type Id a = a
+type FormFields = FormFieldsT Id
+type AFormField = Variant FormFields
+type K a b = a
+type AFormPart = Variant (FormFieldsT (K Boolean))
+type RawForm = Record (FormFieldsT InputValue)
 
 
 -- Your input state is not the same as your form -- though it will contain the raw
@@ -165,7 +171,8 @@ type RawForm =
 
 type FieldValue attrs err a =
   { value :: V (Array err) a
-  , key :: String
+  , aFormField :: a -> AFormField
+  , aFormPart :: Boolean -> AFormPart
   | attrs }
 
 -- Now, our form will be made up of lots of fields, and these fields can have all sorts of different
@@ -267,8 +274,10 @@ passwordForm
         then pure (Just password1)
         else Invalid $ Tuple [ "Password dont match" ] [])
   where
-    pass1 = { value: Valid [] "", key: "password1", helpText: "Here is some help text for the password field.", label: "Password 1" }
-    pass2 = { value: Valid [] "", key: "password2", helpText: "Enter your password again", label: "Password 2" }
+    _password1 = SProxy :: SProxy "password1"
+    _password2 = SProxy :: SProxy "password2"
+    pass1 = { value: Valid [] "", aFormField: inj _password1, aFormPart: inj _password1, helpText: "Here is some help text for the password field.", label: "Password 1" }
+    pass2 = { value: Valid [] "", aFormField: inj _password2, aFormPart: inj _password2, helpText: "Enter your password again", label: "Password 2" }
 
 -- We can continue composing into bigger and bigger forms. This one expects
 -- an input record with at least two password fields and an email field on it,
@@ -279,4 +288,5 @@ signupForm :: ∀ m eff
  => Validation m Form RawForm (Maybe { password :: String, email :: Email })
 signupForm = lift2 { password: _, email: _ } <$> passwordForm <*> emailForm
   where
-    emailForm = buildEmailForm { value: Valid [] "", key: "email", label: "Email" }
+    _email = SProxy :: SProxy "email"
+    emailForm = buildEmailForm { value: Valid [] "", aFormField: inj _email, aFormPart: inj _email, label: "Email" }
