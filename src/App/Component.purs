@@ -40,17 +40,23 @@ _value = prop (SProxy :: SProxy "value")
 _validate :: ∀ t r. Lens' { validate :: t | r } t
 _validate = prop (SProxy :: SProxy "validate")
 
-updateValue :: FormFieldValue -> (State -> State)
-updateValue = case_
-  # on (SProxy :: SProxy "password1") (set (_form <<< prop (SProxy :: SProxy "password1") <<< _value))
-  # on (SProxy :: SProxy "password2") (set (_form <<< prop (SProxy :: SProxy "password2") <<< _value))
-  # on (SProxy :: SProxy "email")     (set (_form <<< prop (SProxy :: SProxy "email")     <<< _value))
+_password1 = SProxy :: SProxy "password1"
+_password2 = SProxy :: SProxy "password2"
+_email = SProxy :: SProxy "email"
 
 updateValidate :: FormFieldValidate -> (State -> State)
-updateValidate = case_
-  # on (SProxy :: SProxy "password1") (set (_form <<< prop (SProxy :: SProxy "password1") <<< _validate))
-  # on (SProxy :: SProxy "password2") (set (_form <<< prop (SProxy :: SProxy "password2") <<< _validate))
-  # on (SProxy :: SProxy "email")     (set (_form <<< prop (SProxy :: SProxy "email")     <<< _validate))
+updateValidate = match
+  { password1: set $ _form <<< prop _password1 <<< _validate
+  , password2: set $ _form <<< prop _password2 <<< _validate
+  , email: set $ _form <<< prop _email <<< _validate
+  }
+
+updateValue :: FormFieldValue -> (State -> State)
+updateValue = match
+  { password1: set $ _form <<< prop _password1 <<< _value
+  , password2: set $ _form <<< prop _password2 <<< _value
+  , email: set $ _form <<< prop _email <<< _value
+  }
 
 component :: ∀ eff m. MonadAff ( console :: CONSOLE, random :: RANDOM | eff ) m => H.Component HH.HTML Query Unit Void m
 component =
