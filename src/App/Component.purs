@@ -12,7 +12,7 @@ import Data.Lens.Record (prop)
 import Data.Maybe (Maybe(Just, Nothing))
 import Data.Symbol (SProxy(..))
 import Data.Tuple (Tuple(..), fst, snd)
-import Data.Variant (case_, on)
+import Data.Variant (case_, match, on)
 import Form (FormFieldValue, FormFieldValidate, Email, Field(PasswordField, EmailField), RawForm, signupForm)
 import Halogen as H
 import Halogen.HTML as HH
@@ -94,10 +94,10 @@ component =
     formControl
       { helpText: Nothing
       , validation: case value of
-          Invalid err -> head err <#> ( case_
-            # on (SProxy :: SProxy "malformed") _.text
-            # on (SProxy :: SProxy "inUse") _.text
-          )
+          Invalid err -> match
+            { inUse: const "This email address is already in use."
+            , malformed: const "This email address is malformed. Perhaps you forgot an '@'?" }
+            <$> head err
           Valid _ _ -> Nothing
       , label
       , inputId: label
@@ -111,11 +111,11 @@ component =
     formControl
       { helpText: Just helpText
       , validation: case value of
-          Invalid err -> head err <#> ( case_
-            # on (SProxy :: SProxy "tooShort") _.text
-            # on (SProxy :: SProxy "tooLong") _.text
-            # on (SProxy :: SProxy "missingDigit") _.text
-          )
+          Invalid err -> match
+            { tooShort: \(Tuple i _) -> "This password is too short. It must be more than " <> show i <> " characters."
+            , tooLong: \(Tuple i _) -> "This password is too long. It must be less than " <> show i <> " characters."
+            , missingDigit: const "Passwords must contain at least one digit."
+            } <$> head err
           Valid _ _ -> Nothing
       , label
       , inputId: label

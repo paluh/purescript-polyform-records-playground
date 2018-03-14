@@ -48,15 +48,13 @@ import Type.Prelude (SProxy(..))
 --
 -- The variant will contain the string that failed, so we can easily inspect the reason for failure.
 
-type Error i = { input :: i, text :: String }
-
 malformed :: ∀ m err
   . Monad m
-  => Validation m (Array (Variant (malformed :: Error String | err))) String Email
+  => Validation m (Array (Variant (malformed :: String | err))) String Email
 malformed = Validation.hoistFnV \str →
   if contains (Pattern "@") str
     then pure $ Email str
-    else Invalid [ inj (SProxy :: SProxy "malformed") { input: str, text: "Email addresses require the @ symbol." } ]
+    else Invalid [ inj (SProxy :: SProxy "malformed") str ]
 
 -- This validator mimics checking a database to ensure an email is not already used; it
 -- does that using a coin toss. Because of that, we're no longer in any monad; we need
@@ -66,7 +64,7 @@ malformed = Validation.hoistFnV \str →
 -- variant, we take a string as input, and we return a validated string.
 inUse :: ∀ m eff err
   . MonadEff (random :: RANDOM | eff) m
- => Validation m (Array (Variant (inUse :: Error String | err))) Email Email
+ => Validation m (Array (Variant (inUse :: String | err))) Email Email
 inUse = Validation.hoistFnMV \e@(Email str) -> do
   v <- liftEff random
   pure (pure e)
@@ -79,32 +77,32 @@ tooShort :: ∀ m err
   . Monad m
  => Int
  -> String
- -> Validation m (Array (Variant (tooShort :: Error (Tuple Int String) | err))) String String
+ -> Validation m (Array (Variant (tooShort :: Tuple Int String | err))) String String
 tooShort min text = Validation.hoistFnV \str ->
   if length str > min
     then pure str
-    else Invalid [ inj (SProxy ∷ SProxy "tooShort") { input: Tuple min str, text }  ]
+    else Invalid [ inj (SProxy ∷ SProxy "tooShort") (Tuple min str) ]
 
 tooLong :: ∀ m err
   . Monad m
  => Int
- -> Validation m (Array (Variant (tooLong :: Error (Tuple Int String) | err))) String String
+ -> Validation m (Array (Variant (tooLong :: Tuple Int String | err))) String String
 tooLong max = Validation.hoistFnV \str →
   if length str < max
     then pure str
-    else Invalid [ inj (SProxy :: SProxy "tooLong") { input: Tuple max str, text: "Must be less than " <> show max <> " in length." } ]
+    else Invalid [ inj (SProxy :: SProxy "tooLong") (Tuple max str) ]
 
 -- Another simple validator; this one ensures that the input contains a digit.
 missingDigit :: ∀ m err
   . Monad m
- => Validation m (Array (Variant (missingDigit :: Error String | err))) String String
+ => Validation m (Array (Variant (missingDigit :: String | err))) String String
 missingDigit = Validation.hoistFnV \str →
   let
     chars = toCharArray str
   in
     if any (_ `elem` chars) (toCharArray "0123456789")
       then pure str
-      else Invalid [ inj (SProxy :: SProxy "missingDigit") { input: str, text: "Must contain a digit." } ]
+      else Invalid [ inj (SProxy :: SProxy "missingDigit") str ]
 
 
 ----------
@@ -193,8 +191,8 @@ derive instance newtypeEmail :: Newtype Email _
 -- fail. An email address can fail because it's malformed or because we checked our database and it's
 -- already in use. A password can fail because it's too long, too short, or doesn't have a number in it.
 
-type EmailError = Variant ( malformed :: Error String, inUse :: Error String )
-type PasswordError = Variant ( missingDigit :: Error String, tooShort :: Error (Tuple Int String), tooLong :: Error (Tuple Int String) )
+type EmailError = Variant ( malformed :: String, inUse :: String )
+type PasswordError = Variant ( missingDigit :: String, tooShort :: Tuple Int String, tooLong :: Tuple Int String )
 
 -- Now, we're ready to create that sum type with our fields. Since we defined FieldValue to allow any
 -- extra attributes we want, we can provide them now. We'll give labels to both field types, and we'll
