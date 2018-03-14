@@ -2,18 +2,18 @@ module App.Component where
 
 import Prelude
 
+import Data.Newtype (unwrap)
 import Control.Monad.Aff.Class (class MonadAff)
 import Control.Monad.Aff.Console (log, CONSOLE)
 import Control.Monad.Eff.Random (RANDOM)
 import Data.Array (head)
 import Data.Lens (Lens', set)
 import Data.Lens.Record (prop)
-import Data.Maybe (Maybe(..), isJust)
-import Data.Record (modify)
+import Data.Maybe (Maybe(Just, Nothing))
 import Data.Symbol (SProxy(..))
 import Data.Tuple (Tuple(..), fst, snd)
 import Data.Variant (case_, on)
-import Form (AFormField, Email, Field(PasswordField, EmailField), RawForm, AFormPart, signupForm)
+import Form (FormFieldValue, FormFieldValidate, Email, Field(PasswordField, EmailField), RawForm, signupForm)
 import Halogen as H
 import Halogen.HTML as HH
 import Halogen.HTML.Events as HE
@@ -21,9 +21,9 @@ import Halogen.HTML.Properties as HP
 import Polyform.Validation (V(..), runValidation)
 
 data Query a
-  = ValidateOne AFormPart a
+  = UpdateContents FormFieldValue a
+  | ValidateOne FormFieldValidate a
   | ValidateAll a
-  | UpdateContents AFormField a
 
 type State =
   { form :: RawForm
@@ -31,24 +31,26 @@ type State =
   , formFields :: Array Field
   , formValue :: Maybe { email :: Email, password :: String } }
 
-_form :: forall t r. Lens' { form :: t | r } t
+_form :: ∀ t r. Lens' { form :: t | r } t
 _form = prop (SProxy :: SProxy "form")
-_value :: forall t r. Lens' { value :: t | r } t
+
+_value :: ∀ t r. Lens' { value :: t | r } t
 _value = prop (SProxy :: SProxy "value")
-_validate :: forall t r. Lens' { validate :: t | r } t
+
+_validate :: ∀ t r. Lens' { validate :: t | r } t
 _validate = prop (SProxy :: SProxy "validate")
 
-doUpdate :: AFormField -> (State -> State)
-doUpdate = case_
+updateValue :: FormFieldValue -> (State -> State)
+updateValue = case_
   # on (SProxy :: SProxy "password1") (set (_form <<< prop (SProxy :: SProxy "password1") <<< _value))
   # on (SProxy :: SProxy "password2") (set (_form <<< prop (SProxy :: SProxy "password2") <<< _value))
-  # on (SProxy :: SProxy "email") (set (_form <<< prop (SProxy :: SProxy "email") <<< _value))
+  # on (SProxy :: SProxy "email")     (set (_form <<< prop (SProxy :: SProxy "email")     <<< _value))
 
-doUpdate' :: AFormPart -> (State -> State)
-doUpdate' = case_
+updateValidate :: FormFieldValidate -> (State -> State)
+updateValidate = case_
   # on (SProxy :: SProxy "password1") (set (_form <<< prop (SProxy :: SProxy "password1") <<< _validate))
   # on (SProxy :: SProxy "password2") (set (_form <<< prop (SProxy :: SProxy "password2") <<< _validate))
-  # on (SProxy :: SProxy "email") (set (_form <<< prop (SProxy :: SProxy "email") <<< _validate))
+  # on (SProxy :: SProxy "email")     (set (_form <<< prop (SProxy :: SProxy "email")     <<< _validate))
 
 component :: ∀ eff m. MonadAff ( console :: CONSOLE, random :: RANDOM | eff ) m => H.Component HH.HTML Query Unit Void m
 component =
@@ -76,7 +78,10 @@ component =
   render st =
     HH.div_
     ( [ HH.h1_
-        [ HH.text $ if (isJust st.formValue) then "Form Valid:" else "Form Not Valid:" ]
+        [ case st.formValue of
+           Nothing -> HH.text "Form Not Yet Valid"
+           Just { email, password } -> HH.code_ [ HH.text $ "Email: " <> (unwrap email), HH.br_, HH.text $ "Password: " <> password ]
+        ]
       , HH.ul_
         $ (\e -> HH.li_ [ HH.text e ]) <$> st.formErrors
       ]
@@ -85,32 +90,41 @@ component =
     )
 
   renderField :: Field -> H.ComponentHTML Query
-  renderField f@(EmailField { value, label, aFormField, aFormPart }) =
+  renderField f@(EmailField { value, label, inputValidate, inputValue }) =
     formControl
       { helpText: Nothing
       , validation: case value of
-          Invalid err -> show <$> head err
-          Valid err a -> show <$> head err
+          Invalid err -> head err <#> ( case_
+            # on (SProxy :: SProxy "malformed") _.text
+            # on (SProxy :: SProxy "inUse") _.text
+          )
+          Valid _ _ -> Nothing
       , label
       , inputId: label
       }
       ( HH.input
-        [ HE.onBlur $ HE.input_ $ ValidateOne (aFormPart true)
-        , HE.onValueInput $ HE.input $ UpdateContents <<< aFormField
-        ] )
-  renderField f@(PasswordField { value, label, helpText, aFormField, aFormPart }) =
+        [ HE.onBlur $ HE.input_ $ ValidateOne (inputValidate true)
+        , HE.onValueInput $ HE.input $ UpdateContents <<< inputValue
+        ]
+      )
+  renderField f@(PasswordField { value, label, helpText, inputValidate, inputValue }) =
     formControl
       { helpText: Just helpText
       , validation: case value of
-          Invalid err -> show <$> head err
-          Valid err a -> show <$> head err
+          Invalid err -> head err <#> ( case_
+            # on (SProxy :: SProxy "tooShort") _.text
+            # on (SProxy :: SProxy "tooLong") _.text
+            # on (SProxy :: SProxy "missingDigit") _.text
+          )
+          Valid _ _ -> Nothing
       , label
       , inputId: label
       }
       ( HH.input
-        [ HE.onBlur $ HE.input_ $ ValidateOne (aFormPart true)
-        , HE.onValueInput $ HE.input $ UpdateContents <<< aFormField
-        ] )
+        [ HE.onBlur $ HE.input_ $ ValidateOne (inputValidate true)
+        , HE.onValueInput $ HE.input $ UpdateContents <<< inputValue
+        ]
+      )
 
   eval :: Query ~> H.ComponentDSL State Query Void m
   eval = case _ of
@@ -127,12 +141,12 @@ component =
       H.modify _ { formErrors = fst form, formFields = snd form, formValue = value }
       pure next
 
-    UpdateContents update next -> do
-      H.modify (doUpdate update)
+    UpdateContents f next -> do
+      H.modify (updateValue f)
       pure next
 
-    ValidateOne update next -> do
-      H.modify (doUpdate' update)
+    ValidateOne f next -> do
+      H.modify (updateValidate f)
       eval $ ValidateAll next
 
 
@@ -163,11 +177,13 @@ formControl props html =
     , HH.br_
     ]
   where
-    helpText (Just errors) _ =
-      HH.span_ [ HH.text $ "Errors: " <> errors ]
-    helpText _ (Just x) =
-      HH.span_ [ HH.text x ]
-    helpText Nothing Nothing =
+    helpText (Just error) (Just help) =
+      HH.span_ [ HH.text error, HH.br_, HH.text help ]
+    helpText (Just error) _ =
+      HH.span_ [ HH.text error ]
+    helpText _ (Just help) =
+      HH.span_ [ HH.text help ]
+    helpText _ _ =
       HH.text ""
 
     label x = HH.span_ [ HH.text x ]

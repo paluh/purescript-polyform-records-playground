@@ -2,6 +2,7 @@ module Form where
 
 import Prelude
 
+import Data.Newtype (class Newtype)
 import Control.Apply (lift2)
 import Control.Monad.Eff.Class (class MonadEff, liftEff)
 import Control.Monad.Eff.Random (random, RANDOM)
@@ -46,13 +47,16 @@ import Type.Prelude (SProxy(..))
 -- so we leave the monad polymorphic and use hoistFnV. Finally, we're going to create a new error variant.
 --
 -- The variant will contain the string that failed, so we can easily inspect the reason for failure.
+
+type Error i = { input :: i, text :: String }
+
 malformed :: ∀ m err
   . Monad m
-  => Validation m (Array (Variant (malformed :: String | err))) String Email
+  => Validation m (Array (Variant (malformed :: Error String | err))) String Email
 malformed = Validation.hoistFnV \str →
   if contains (Pattern "@") str
     then pure $ Email str
-    else Invalid [ inj (SProxy :: SProxy "malformed") str ]
+    else Invalid [ inj (SProxy :: SProxy "malformed") { input: str, text: "Email addresses require the @ symbol." } ]
 
 -- This validator mimics checking a database to ensure an email is not already used; it
 -- does that using a coin toss. Because of that, we're no longer in any monad; we need
@@ -62,7 +66,7 @@ malformed = Validation.hoistFnV \str →
 -- variant, we take a string as input, and we return a validated string.
 inUse :: ∀ m eff err
   . MonadEff (random :: RANDOM | eff) m
- => Validation m (Array (Variant (inUse :: String | err))) Email Email
+ => Validation m (Array (Variant (inUse :: Error String | err))) Email Email
 inUse = Validation.hoistFnMV \e@(Email str) -> do
   v <- liftEff random
   pure (pure e)
@@ -74,32 +78,33 @@ inUse = Validation.hoistFnMV \e@(Email str) -> do
 tooShort :: ∀ m err
   . Monad m
  => Int
- -> Validation m (Array (Variant (tooShort :: Tuple Int String | err))) String String
-tooShort min = Validation.hoistFnV \str ->
+ -> String
+ -> Validation m (Array (Variant (tooShort :: Error (Tuple Int String) | err))) String String
+tooShort min text = Validation.hoistFnV \str ->
   if length str > min
     then pure str
-    else Invalid [ inj (SProxy ∷ SProxy "tooShort") (Tuple min str) ]
+    else Invalid [ inj (SProxy ∷ SProxy "tooShort") { input: Tuple min str, text }  ]
 
 tooLong :: ∀ m err
   . Monad m
  => Int
- -> Validation m (Array (Variant (tooLong :: Tuple Int String | err))) String String
+ -> Validation m (Array (Variant (tooLong :: Error (Tuple Int String) | err))) String String
 tooLong max = Validation.hoistFnV \str →
   if length str < max
     then pure str
-    else Invalid [ inj (SProxy :: SProxy "tooLong") (Tuple max str) ]
+    else Invalid [ inj (SProxy :: SProxy "tooLong") { input: Tuple max str, text: "Must be less than " <> show max <> " in length." } ]
 
 -- Another simple validator; this one ensures that the input contains a digit.
 missingDigit :: ∀ m err
   . Monad m
- => Validation m (Array (Variant (missingDigit :: String | err))) String String
+ => Validation m (Array (Variant (missingDigit :: Error String | err))) String String
 missingDigit = Validation.hoistFnV \str →
   let
     chars = toCharArray str
   in
     if any (_ `elem` chars) (toCharArray "0123456789")
       then pure str
-      else Invalid [ inj (SProxy :: SProxy "missingDigit") str ]
+      else Invalid [ inj (SProxy :: SProxy "missingDigit") { input: str, text: "Must contain a digit." } ]
 
 
 ----------
@@ -117,7 +122,7 @@ passwordFieldValidation :: ∀ m
  => Int
  -> Int
  -> Validation m (Array PasswordError) String String
-passwordFieldValidation min max = tooShort min >>> tooLong max >>> missingDigit
+passwordFieldValidation min max = tooShort min ("Passwords must be at least " <> show min <> " characters long.") >>> tooLong max >>> missingDigit
 
 
 -- | INPUT
@@ -140,21 +145,20 @@ type FormFieldsT f =
   , password1 :: f String
   , password2 :: f String
   )
-type Id a = a
-type FormFields = FormFieldsT Id
-type AFormField = Variant FormFields
+
+type Id a  = a
 type K a b = a
-type AFormPart = Variant (FormFieldsT (K Boolean))
-type RawForm = Record (FormFieldsT InputValue)
+
+type FormFieldValue    = Variant (FormFieldsT Id)
+type FormFieldValidate = Variant (FormFieldsT (K Boolean))
+type RawForm           = Record  (FormFieldsT InputValue)
 
 
 -- Your input state is not the same as your form -- though it will contain the raw
 -- values that you want to validate! Your input state is just the contents of what
 -- the user has input into the DOM. So where does the form come in?
 
-
 -- | FIELDS
-
 -- Forms are made up of fields. At minimum, a field on your form will need to carry the list
 -- of possible validation errors that can occur in it, and the value that successful validation
 -- should result in.
@@ -167,12 +171,12 @@ type RawForm = Record (FormFieldsT InputValue)
 -- data V e a = Invalid e | Valid e a
 --
 -- If the field fails to validate, we'll get an Invalid with an array of errors. If it validates,
--- we'll get a Valid with (why the e?) and the successful value.
+-- we'll get a Valid with the form and the successful value.
 
 type FieldValue attrs err a =
-  { value :: V (Array err) a
-  , aFormField :: a -> AFormField
-  , aFormPart :: Boolean -> AFormPart
+  { value         :: V (Array err) a
+  , inputValue    :: a -> FormFieldValue
+  , inputValidate :: Boolean -> FormFieldValidate
   | attrs }
 
 -- Now, our form will be made up of lots of fields, and these fields can have all sorts of different
@@ -183,13 +187,14 @@ type FieldValue attrs err a =
 -- validation has succeeded, but leave passwords as strings.
 
 newtype Email = Email String
+derive instance newtypeEmail :: Newtype Email _
 
 -- While we haven't yet actually written our validation, I'll assume we already know how our fields can
 -- fail. An email address can fail because it's malformed or because we checked our database and it's
 -- already in use. A password can fail because it's too long, too short, or doesn't have a number in it.
 
-type EmailError = Variant ( malformed :: String, inUse :: String )
-type PasswordError = Variant ( missingDigit :: String, tooShort :: Tuple Int String, tooLong :: Tuple Int String )
+type EmailError = Variant ( malformed :: Error String, inUse :: Error String )
+type PasswordError = Variant ( missingDigit :: Error String, tooShort :: Error (Tuple Int String), tooLong :: Error (Tuple Int String) )
 
 -- Now, we're ready to create that sum type with our fields. Since we defined FieldValue to allow any
 -- extra attributes we want, we can provide them now. We'll give labels to both field types, and we'll
@@ -268,16 +273,16 @@ passwordForm
   -- We can always fail here and return a form representing our error, which
   -- will be appended to the whole form.
   >>> Validation.hoistFnV (case _ of
-    Nothing → pure Nothing
-    Just { password1, password2 } →
+    Nothing -> pure Nothing
+    Just { password1, password2 } ->
       if password1 == password2
         then pure (Just password1)
-        else Invalid $ Tuple [ "Password dont match" ] [])
+        else Invalid $ Tuple [ "Passwords don't match" ] [])
   where
-    _password1 = SProxy :: SProxy "password1"
-    _password2 = SProxy :: SProxy "password2"
-    pass1 = { value: Valid [] "", aFormField: inj _password1, aFormPart: inj _password1, helpText: "Here is some help text for the password field.", label: "Password 1" }
-    pass2 = { value: Valid [] "", aFormField: inj _password2, aFormPart: inj _password2, helpText: "Enter your password again", label: "Password 2" }
+    _pass1 = SProxy :: SProxy "password1"
+    _pass2 = SProxy :: SProxy "password2"
+    pass1 = { value: Valid [] "", inputValue: inj _pass1, inputValidate: inj _pass1, helpText: "Here is some help text for the password field.", label: "Password 1" }
+    pass2 = { value: Valid [] "", inputValue: inj _pass2, inputValidate: inj _pass2, helpText: "Enter your password again", label: "Password 2" }
 
 -- We can continue composing into bigger and bigger forms. This one expects
 -- an input record with at least two password fields and an email field on it,
@@ -289,4 +294,4 @@ signupForm :: ∀ m eff
 signupForm = lift2 { password: _, email: _ } <$> passwordForm <*> emailForm
   where
     _email = SProxy :: SProxy "email"
-    emailForm = buildEmailForm { value: Valid [] "", aFormField: inj _email, aFormPart: inj _email, label: "Email" }
+    emailForm = buildEmailForm { value: Valid [] "", inputValue: inj _email, inputValidate: inj _email, label: "Email" }
