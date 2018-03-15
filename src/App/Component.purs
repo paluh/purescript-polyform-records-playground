@@ -2,7 +2,6 @@ module App.Component where
 
 import Prelude
 
-import Data.Newtype (unwrap)
 import Control.Monad.Aff.Class (class MonadAff)
 import Control.Monad.Aff.Console (log, CONSOLE)
 import Control.Monad.Eff.Random (RANDOM)
@@ -12,8 +11,8 @@ import Data.Lens.Record (prop)
 import Data.Maybe (Maybe(Just, Nothing))
 import Data.Symbol (SProxy(..))
 import Data.Tuple (Tuple(..), fst, snd)
-import Data.Variant (case_, match, on)
-import Form (FormFieldValue, FormFieldValidate, Email, Field(PasswordField, EmailField), RawForm, signupForm)
+import Data.Variant (match)
+import App.SignupForm (Field(..), FormFieldValidate, FormFieldValue, RawForm, _email, _password1, _password2, signupForm)
 import Halogen as H
 import Halogen.HTML as HH
 import Halogen.HTML.Events as HE
@@ -25,12 +24,6 @@ data Query a
   | ValidateOne FormFieldValidate a
   | ValidateAll a
 
-type State =
-  { form :: RawForm
-  , formErrors :: Array String
-  , formFields :: Array Field
-  , formValue :: Maybe { email :: Email, password :: String } }
-
 _form :: ∀ t r. Lens' { form :: t | r } t
 _form = prop (SProxy :: SProxy "form")
 
@@ -39,10 +32,6 @@ _value = prop (SProxy :: SProxy "value")
 
 _validate :: ∀ t r. Lens' { validate :: t | r } t
 _validate = prop (SProxy :: SProxy "validate")
-
-_password1 = SProxy :: SProxy "password1"
-_password2 = SProxy :: SProxy "password2"
-_email = SProxy :: SProxy "email"
 
 updateValidate :: FormFieldValidate -> (State -> State)
 updateValidate = match
@@ -57,6 +46,13 @@ updateValue = match
   , password2: set $ _form <<< prop _password2 <<< _value
   , email: set $ _form <<< prop _email <<< _value
   }
+
+type State =
+  { form :: RawForm
+  , formErrors :: Array String
+  , formFields :: Array Field
+  , formValue :: Maybe { email :: String, password :: String } }
+
 
 component :: ∀ eff m. MonadAff ( console :: CONSOLE, random :: RANDOM | eff ) m => H.Component HH.HTML Query Unit Void m
 component =
@@ -86,7 +82,7 @@ component =
     ( [ HH.h1_
         [ case st.formValue of
            Nothing -> HH.text "Form Not Yet Valid"
-           Just { email, password } -> HH.code_ [ HH.text $ "Email: " <> (unwrap email), HH.br_, HH.text $ "Password: " <> password ]
+           Just { email, password } -> HH.code_ [ HH.text $ "Email: " <> email, HH.br_, HH.text $ "Password: " <> password ]
         ]
       , HH.ul_
         $ (\e -> HH.li_ [ HH.text e ]) <$> st.formErrors

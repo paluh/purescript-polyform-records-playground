@@ -5,9 +5,9 @@ import Prelude
 import Control.Monad.Eff (Eff)
 import Control.Monad.Eff.Console (CONSOLE, log)
 import Control.Monad.Eff.Random (RANDOM)
-import Polyform.Validation (runValidation)
-import Form (signupForm)
-import Form.Run (notValidate, printResult, validate)
+import Polyform.Validation (runValidation, V(..))
+import Debug.Trace (traceAnyA)
+import App.SignupForm (signupForm)
 import App.Component (component)
 import Halogen.Aff as HA
 import Halogen.VDom.Driver (runUI)
@@ -44,3 +44,25 @@ main = do
   HA.runHalogenAff do
     body <- HA.awaitBody
     runUI component unit body
+
+
+-- This helper reveals the structure of the forms with `pulp run`.
+printResult :: ∀ err eff a. V err a -> Eff (console :: CONSOLE | eff) Unit
+printResult =
+  case _ of
+    Valid form value → do
+      log "FORM VALID:"
+      traceAnyA form
+      log "FINAL VALUE:"
+      traceAnyA value
+
+    Invalid form → do
+      log "FORM INVALID:"
+      traceAnyA form
+
+
+validate :: ∀ a. a -> { value :: a, validate :: Boolean }
+validate value = { value, validate: true }
+
+notValidate :: ∀ a. a -> { value :: a, validate :: Boolean }
+notValidate value = { value, validate: false }
