@@ -15,12 +15,15 @@ import Polyform.Validation (V(..), Validation)
 import Polyform.Validation as Validation
 import Type.Prelude (SProxy(..))
 
--- | Ultimately, we're creating this form.
+-- | THE FORM
+--
+-- I'll skip to the end. Our ultimate result is a signup form created by composing two
+-- other forms together. It will result in { password, email } even though there are
+-- more input fields than that.
 
 signupForm = lift2 { password: _, email: _ } <$> passwordForm <*> emailForm
 
--- | These are the input fields we will have to work with:
-
+-- | These are the fields we want in our form:
 type FormFieldsT f =
   ( email     :: f String
   , password1 :: f String
@@ -28,24 +31,26 @@ type FormFieldsT f =
   )
 
 -- | They can be identified with these variants:
-
 _password1 = SProxy :: SProxy "password1"
 _password2 = SProxy :: SProxy "password2"
 _email     = SProxy :: SProxy "email"
 
 -- | We can access the 'value' part of each input like this:
-type FormFieldValue    = Variant (FormFieldsT Id)
+type FormFieldValue = Variant (FormFieldsT Id)
 
 -- | and the 'validation' part like this:
 type FormFieldValidate = Variant (FormFieldsT (K Boolean))
 
 -- | and we can generate our raw form like this:
-type RawForm           = Record  (FormFieldsT InputValue)
+type RawForm = Record  (FormFieldsT InputValue)
 
 -- | Our form will be made up of fields of these types:
 data Field
-  = EmailField    (FieldValue (label :: String) FormFieldValue FormFieldValidate EmailError String)
-  | PasswordField (FieldValue (label :: String, helpText :: String) FormFieldValue FormFieldValidate PasswordError String)
+  = EmailField
+    (FieldValue (label :: String) FormFieldValue FormFieldValidate EmailError String)
+  | PasswordField
+    (FieldValue (label :: String, helpText :: String) FormFieldValue FormFieldValidate PasswordError String)
+
 
 -- | FORM CONSTRUCTORS
 
@@ -54,6 +59,7 @@ buildEmailForm v = formFromField _.email EmailField v emailFieldValidation
 
 -- Same for password forms:
 buildPasswordForm accessor v = formFromField accessor PasswordField v (passwordFieldValidation 5 50)
+
 
 -- | FORM PARTS
 
@@ -89,7 +95,7 @@ passwordForm = (
             , label: "Password 2" }
 
 
--- | Validation
+-- | Form Validation
 
 type EmailError = Variant
   ( malformed :: String
