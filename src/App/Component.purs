@@ -3,14 +3,14 @@ module App.Component where
 import Prelude
 
 import Control.Monad.Aff.Class (class MonadAff)
-import Control.Monad.Aff.Console (log, CONSOLE)
+import Control.Monad.Aff.Console (CONSOLE)
 import Control.Monad.Eff.Random (RANDOM)
 import Data.Array (head, take, drop)
 import Data.Lens (Lens', set)
 import Data.Lens.Record (prop)
 import Data.Maybe (Maybe(Just, Nothing))
 import Data.Symbol (SProxy(..))
-import Data.Tuple (Tuple(..), fst, snd)
+import Data.Tuple (Tuple(..))
 import Data.Variant (match)
 import App.SignupForm (Field(..), FormFieldValidate, FormFieldValue, RawForm, _email, _password1, _password2, signupForm)
 import Form.Field (_value, _validate)
@@ -27,7 +27,6 @@ data Query a
 
 type State =
   { form       :: RawForm
-  , formErrors :: Array String
   , formFields :: Array Field
   , formValue  :: Maybe { email :: String, password :: String } }
 
@@ -76,7 +75,7 @@ component =
     }
   where
   initialState :: State
-  initialState = { form: initialForm, formErrors: [], formFields: [], formValue: Nothing }
+  initialState = { form: initialForm, formFields: [], formValue: Nothing }
 
   initialForm :: RawForm
   initialForm =
@@ -95,7 +94,6 @@ component =
              HH.code_
              [ HH.text $ "Email: " <> email, HH.br_, HH.text $ "Password: " <> password ]
         ]
-      , HH.ul_ $ (\e -> HH.li_ [ HH.text e ]) <$> st.formErrors
       ]
     <>
       -- As long as fields are in the right order, we can simply take/drop and intersperse
@@ -123,7 +121,9 @@ component =
       , validation: case value of
           Invalid err -> match
             { inUse: const "This email address is already in use."
-            , malformed: const "This email address is malformed. Perhaps you forgot an '@'?" }
+            , malformed: const "This email address is malformed. Perhaps you forgot an '@'?"
+            , notEqual: \(Tuple a b) -> "The email address you entered does not match with " <> b
+            }
             <$> head err
           Valid _ _ -> Nothing
       , label
@@ -148,6 +148,7 @@ component =
                                         <> show i
                                         <> " characters."
             , missingDigit: const "Passwords must contain at least one digit."
+            , notEqual: const "Your password entries do not match each other."
             } <$> head err
           Valid _ _ -> Nothing
       , label
@@ -175,7 +176,7 @@ component =
 
       -- This isn't necessary, but I found it convenient to map these to records
       -- in state.
-      H.modify _ { formErrors = fst form, formFields = snd form, formValue = value }
+      H.modify _ { formFields = form, formValue = value }
       pure next
 
     UpdateContents val next -> do

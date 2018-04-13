@@ -62,26 +62,24 @@ buildPasswordForm accessor v = formFromField accessor PasswordField v (passwordF
 
 
 -- | FORM PARTS
-
--- This is now a legitimate single-field form
 emailForm = buildEmailForm
   { value: Valid [] ""
   , inputValue: inj _email
   , inputValidate: inj _email
   , label: "Email" }
 
--- | This is a legitimate two-field form
-passwordForm = (
-      lift2 {password1: _, password2: _}
-  <$> buildPasswordForm _.password1 pass1
-  <*> buildPasswordForm _.password2 pass2
-  )
-  >>> Validation.hoistFnV (case _ of
-    Nothing -> pure Nothing
-    Just { password1, password2 } ->
-      if password1 == password2
-        then pure $ Just password1
-        else Invalid $ Tuple [ "Passwords don't match" ] [])
+passwordForm = ( lift2 { password1: _, password2: _ } <$> buildPasswordForm _.password1 pass1 <*> buildPasswordForm _.password2 pass2 )
+   >>> Validation.hoistFnV
+   ( case _ of
+      Nothing -> pure Nothing
+      Just { password1, password2 } ->
+        if password1 == password2
+          then pure $ Just password1
+          else Invalid $ PasswordField <$>
+                  [ pass1 { value = Invalid [ inj (SProxy :: SProxy "notEqual") (Tuple password1 password2) ] }
+                  , pass2 { value = Invalid [ inj (SProxy :: SProxy "notEqual") (Tuple password2 password1) ] }
+                  ]
+    )
   where
     pass1 = { value: Valid [] ""
             , inputValue: inj _password1
@@ -100,12 +98,14 @@ passwordForm = (
 type EmailError = Variant
   ( malformed :: String
   , inUse :: String
+  , notEqual :: Tuple String String
   )
 
 type PasswordError = Variant
   ( missingDigit :: String
   , tooShort :: Tuple Int String
   , tooLong :: Tuple Int String
+  , notEqual :: Tuple String String
   )
 
 emailFieldValidation :: ∀ m eff

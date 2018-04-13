@@ -4,7 +4,6 @@ import Prelude
 
 import Data.Maybe (Maybe(..))
 import Data.Monoid (class Monoid, mempty)
-import Data.Tuple (Tuple(..))
 import Polyform.Validation (V(Invalid, Valid), Validation(Validation))
 import Polyform.Validation as Validation
 
@@ -15,7 +14,7 @@ import Polyform.Validation as Validation
 -- an array of fields in the form. All of these are monoids, which allows
 -- you to build up successively larger forms with applicative syntax.
 
-type Form field = Tuple (Array String) (Array field)
+type Form field = Array field
 
 -- | CONSTRUCTING A FORM FROM A FIELD
 
@@ -62,16 +61,10 @@ formFromField accessor constructor defaultInput fieldValidation =
         pure $ case r of
           -- The form along with the result value, so we can combine both into
           -- larger values and forms...
-          Valid e a ->
-            Valid
-              (Tuple [] [ constructor $ defaultInput { value = Valid e value } ])
-              (Just a)
+          Valid e a -> Valid [ constructor $ defaultInput { value = Valid e value } ] (Just a)
           -- ...or the form as a representation of our error, which can then be combined
           -- with other forms.
-          Invalid e ->
-            Invalid
-              (Tuple [] [ constructor $ defaultInput { value = Invalid e } ])
-      else pure $
-        Valid
-          (Tuple [] [ constructor $ defaultInput { value = Valid mempty value } ])
-          Nothing
+          Invalid e -> Invalid [ constructor $ defaultInput { value = Invalid e } ]
+      -- Or don't validate at all
+      else
+        pure $ Valid [ constructor $ defaultInput { value = Valid mempty value } ] Nothing
